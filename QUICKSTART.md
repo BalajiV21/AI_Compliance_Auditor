@@ -1,4 +1,4 @@
-# 🚀 Quick Start Guide
+#  Quick Start Guide
 
 Get the Agentic Compliance Auditor running in 5 minutes!
 
