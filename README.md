@@ -22,6 +22,23 @@ This system combines **Agentic RAG** (Retrieval Augmented Generation) with **mul
 - **SOC2** (Service Organization Control 2)
 - Extensible to any regulatory framework
 
+## Screenshots
+
+### Main Interface
+![Main UI](img/Screenshot%202026-02-18%20030721.png)
+
+### Query with Answer & Cited Sources
+![Query Result](img/Screenshot%202026-02-18%20031943.png)
+
+### Answer Detail with Citations
+![Answer Detail](img/Screenshot%202026-02-18%20032039.png)
+
+### Conversation History
+![Conversation History](img/Screenshot%202026-02-18%20032248.png)
+
+### Settings & System Stats
+![Settings Sidebar](img/Screenshot%202026-02-18%20032306.png)
+
 ##  Architecture
 
 ```
