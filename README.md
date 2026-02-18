@@ -8,12 +8,12 @@ This system combines **Agentic RAG** (Retrieval Augmented Generation) with **mul
 
 ### Key Features
 
-- ** Agentic RAG**: Autonomous agents using LangGraph that can plan, reason, use tools, and self-reflect
-- ** Hybrid Retrieval**: Semantic search + keyword matching + metadata filtering for precision
-- ** Multi-Tier Memory**: Redis for session management, Neo4j for knowledge graphs
-- ** Citation Tracking**: Every answer includes source citations with article/section references
-- ** Evaluation Framework**: RAGAS-based evaluation for quality assurance
-- ** Production-Ready**: FastAPI server + Streamlit UI + comprehensive logging
+-  Agentic RAG: Autonomous agents using LangGraph that can plan, reason, use tools, and self-reflect
+-  Hybrid Retrieval: Semantic search + keyword matching + metadata filtering for precision
+-  Multi-Tier Memory: Redis for session management, Neo4j for knowledge graphs
+-  Citation Tracking: Every answer includes source citations with article/section references
+-  Evaluation Framework: RAGAS-based evaluation for quality assurance
+-  Production-Ready: FastAPI server + Streamlit UI + comprehensive logging
 
 ### Supported Regulations
 
