@@ -5,6 +5,7 @@ An advanced regulatory compliance auditing system that helps organizations autom
 ##  Overview
 
 This system combines **Agentic RAG** (Retrieval Augmented Generation) with **multi-tier memory systems** to provide accurate, cited, and contextually-aware compliance analysis. The platform functions as an intelligent compliance officer that can reason through complex regulatory requirements.
+[![Compliance Auditor UI](img/Screenshot 2026-02-18 030721.png)]
 
 ### Key Features
 
