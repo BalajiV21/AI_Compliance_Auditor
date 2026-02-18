@@ -295,7 +295,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     loader = DocumentLoader()
-    chunker = RegulationChunker(chunk_size=512, chunk_overlap=50)
+    chunker = RegulationChunker(chunk_size=256, chunk_overlap=20)
 
     # Load and chunk a sample document
     sample_dir = Path(__file__).parent.parent.parent / "data" / "sample_docs"

@@ -22,8 +22,7 @@ st.set_page_config(
 )
 
 # API endpoint
-API_URL = f"http://{settings.API_HOST}:{settings.API_PORT}"
-
+API_URL = f"http://localhost:{settings.API_PORT}"
 
 def check_api_health():
     """Check if API is running"""

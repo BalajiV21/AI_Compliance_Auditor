@@ -1,108 +1,157 @@
 """
-Setup script for Agentic Compliance Auditor
-Initializes the vector database with sample documents
+Ultra-Lightweight Setup Script
+No embeddings, no heavy models - just stores text directly in ChromaDB
 """
 import sys
+import gc
 from pathlib import Path
 
-# Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
-from ingestion import DocumentLoader, RegulationChunker
-from retrieval import VectorStore
-from config import settings
 from loguru import logger
+import chromadb
+from chromadb.config import Settings
+
+# Configuration
+CHROMA_DIR  = "./data/chroma_db"
+SAMPLE_DIR  = "./data/sample_docs"
+COLLECTION  = "compliance_documents"
+CHUNK_SIZE  = 150   # Very small chunks
+
+
+def infer_doc_type(filename: str) -> str:
+    f = filename.lower()
+    if   "gdpr"  in f: return "GDPR"
+    elif "hipaa" in f: return "HIPAA"
+    elif "soc2"  in f: return "SOC2"
+    else:              return "General"
 
 
 def main():
-    """Setup the compliance auditor system"""
-    print("="*60)
-    print("🚀 Agentic Compliance Auditor - Setup")
-    print("="*60)
+    print("=" * 60)
+    print("Agentic Compliance Auditor - Ultra Lite Setup")
+    print("=" * 60)
 
-    # Step 1: Initialize components
-    print("\n📦 Initializing components...")
-    loader = DocumentLoader()
-    chunker = RegulationChunker(
-        chunk_size=settings.CHUNK_SIZE,
-        chunk_overlap=settings.CHUNK_OVERLAP
-    )
-    vector_store = VectorStore(
-        persist_directory=settings.CHROMA_PERSIST_DIR,
-        collection_name='compliance_documents',
-        embedding_model=settings.EMBEDDING_MODEL
+    # Step 1: Setup ChromaDB first
+    print("\n Setting up ChromaDB...")
+    Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
+
+    client = chromadb.PersistentClient(
+        path=CHROMA_DIR,
+        settings=Settings(anonymized_telemetry=False, allow_reset=True),
     )
 
-    # Step 2: Load sample documents
-    print("\n📄 Loading sample documents...")
-    sample_dir = Path(__file__).parent / "data" / "sample_docs"
+    try:
+        client.delete_collection(COLLECTION)
+    except Exception:
+        pass
 
-    if not sample_dir.exists():
-        print(f"❌ Sample documents directory not found: {sample_dir}")
-        return False
+    collection = client.create_collection(
+        name=COLLECTION,
+        metadata={"hnsw:space": "cosine"},
+    )
+    print("  ChromaDB ready")
 
-    docs = loader.load_directory(str(sample_dir))
+    # Step 2: Process one file at a time to save RAM
+    print("\n Processing documents one at a time...")
+    sample_path = Path(SAMPLE_DIR)
+    total_chunks = 0
 
-    if not docs:
-        print("❌ No documents found in sample_docs directory")
-        return False
+    for txt_file in sample_path.glob("*.txt"):
+        doc_type = infer_doc_type(txt_file.name)
+        print(f"\n  Loading: {txt_file.name}")
 
-    print(f"✓ Loaded {len(docs)} documents:")
-    for doc in docs:
-        print(f"  - {doc['metadata']['filename']} ({doc['metadata']['document_type']})")
+        # Read file
+        text = txt_file.read_text(encoding="utf-8")
+        lines = text.split("\n")
 
-    # Step 3: Chunk documents
-    print("\n✂️ Chunking documents...")
-    all_chunks = []
-    for doc in docs:
-        chunks = chunker.chunk_document(doc)
-        all_chunks.extend(chunks)
-        print(f"  - {doc['metadata']['filename']}: {len(chunks)} chunks")
+        # Build small chunks line by line
+        chunks, ids, metas = [], [], []
+        current = ""
+        chunk_idx = 0
 
-    print(f"✓ Created {len(all_chunks)} chunks total")
+        for line in lines:
+            current += line + "\n"
+            if len(current) >= CHUNK_SIZE:
+                chunk_text = current.strip()
+                if chunk_text:
+                    safe_name = txt_file.name.replace(".", "_")
+                    chunks.append(chunk_text)
+                    ids.append(f"{safe_name}_{chunk_idx}")
+                    metas.append({
+                        "filename": txt_file.name,
+                        "document_type": doc_type,
+                        "chunk_index": chunk_idx,
+                    })
+                    chunk_idx += 1
+                current = ""
 
-    # Step 4: Store in vector database
-    print("\n💾 Storing in vector database...")
-    print("  (This may take a few minutes...)")
+        # Add leftover text
+        if current.strip():
+            safe_name = txt_file.name.replace(".", "_")
+            chunks.append(current.strip())
+            ids.append(f"{safe_name}_{chunk_idx}")
+            metas.append({
+                "filename": txt_file.name,
+                "document_type": doc_type,
+                "chunk_index": chunk_idx,
+            })
 
-    vector_store.add_documents(all_chunks)
+        print(f"  Created {len(chunks)} chunks")
 
-    # Step 5: Verify
-    print("\n✅ Verifying setup...")
-    stats = vector_store.get_collection_stats()
-    print(f"  - Collection: {stats['collection_name']}")
-    print(f"  - Total chunks: {stats['total_chunks']}")
-    print(f"  - Embedding dimension: {stats['embedding_model']}")
+        # Insert one chunk at a time to save RAM
+        inserted = 0
+        for i in range(len(chunks)):
+            try:
+                collection.add(
+                    ids       =[ids[i]],
+                    documents =[chunks[i]],
+                    metadatas =[metas[i]],
+                )
+                inserted += 1
+            except Exception as e:
+                print(f"  Warning: skipped chunk {i}: {e}")
 
-    # Step 6: Test search
-    print("\n🔍 Testing search...")
-    results = vector_store.collection.query(
+        print(f"  Stored {inserted} chunks")
+        total_chunks += inserted
+
+        # Free memory after each file
+        del text, lines, chunks, ids, metas
+        gc.collect()
+
+    # Step 3: Verify
+    print(f"\n Verifying...")
+    count = collection.count()
+    print(f"  Total chunks in DB: {count}")
+
+    # Step 4: Test search
+    print("\n Testing search...")
+    results = collection.query(
         query_texts=["data retention"],
         n_results=1
     )
 
-    if results and results['ids'] and results['ids'][0]:
-        print("✓ Search is working correctly")
+    if results["ids"] and results["ids"][0]:
+        print("  Search working!")
     else:
-        print("⚠️ Search test did not return results")
+        print("  Warning: search returned no results")
 
-    print("\n"+"="*60)
-    print("✅ Setup Complete!")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("Setup Complete!")
+    print("=" * 60)
+    print(f"  Total chunks stored: {count}")
     print("\nNext steps:")
-    print("1. Start Ollama: ollama serve")
-    print("2. Start API: cd src/api && python main.py")
-    print("3. Start UI: cd ui && streamlit run streamlit_app.py")
-    print("\nFor more information, see README.md")
-
+    print("  1. Start Ollama:  ollama serve")
+    print("  2. Start API:     cd src/api && python main.py")
+    print("  3. Start UI:      cd ui && streamlit run streamlit_app.py")
     return True
 
 
 if __name__ == "__main__":
     try:
-        success = main()
-        sys.exit(0 if success else 1)
+        ok = main()
+        sys.exit(0 if ok else 1)
     except Exception as e:
-        print(f"\n❌ Setup failed with error: {e}")
+        print(f"\n Setup failed: {e}")
         logger.exception("Setup error")
         sys.exit(1)

@@ -79,3 +79,7 @@ htmlcov/
 *.swp
 ~$*.docx
 read_doc.py
+
+# Excluded project files
+run_all.bat
+quickstart.md
