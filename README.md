@@ -76,36 +76,62 @@ Everything except the LLM call runs locally. Documents, embeddings, and session 
 
 ## Architecture
 
-Here's what actually happens when you submit a query:
+The agent runs three sequential steps — retrieve, generate, reflect — inside a LangGraph state machine. Reflection can loop back to retrieve if the answer isn't grounded.
 
 ```
-User Query
+User query
+    │  (HTTP POST /query  { query, session_id })
+    ▼
+FastAPI endpoint
     │
     ▼
-FastAPI Endpoint (/query)
+ComplianceAgent  ── LangGraph StateGraph ──────────────────────┐
+                                                               │
+  Step 1. Retrieve                                             │
+    │                                                          │
+    │  query text                                              │
+    ▼                                                          │
+  HybridRetriever                                              │
+    ├── Semantic search  →  ChromaDB                           │
+    │    (query embedded in-process via sentence-transformers, │
+    │     all-MiniLM-L6-v2, 384-dim)                           │
+    └── Keyword search   →  BM25 over chunk text               │
+    │                                                          │
+    │  top-k chunks + similarity scores + citations            │
+    ▼                                                          │
+                                                               │
+  Step 2. Generate                                             │
+    │                                                          │
+    │  system prompt + user query + retrieved chunks           │
+    ▼                                                          │
+  OpenAI gpt-4o-mini (API call)                                │
+    │                                                          │
+    │  draft answer                                            │
+    ▼                                                          │
+                                                               │
+  Step 3. Reflect  (conditional edge, optional)                │
+    │                                                          │
+    │  draft answer + retrieved chunks                         │
+    ▼                                                          │
+  Reflection LLM call  ── grounded + properly cited? ──────────┤
+    │                                                          │
+    │  yes → finalize           no → loop back to Step 1 ──────┘
+    ▼                          (max N iterations, default 3)
+Final answer + citations
+    │
+    ├──►  Redis   (session history keyed by session_id; in-memory fallback if Redis is down)
+    └──►  Neo4j   (regulation → article → requirement relationships; optional, skipped if offline)
     │
     ▼
-ComplianceAgent  ←── LangGraph StateGraph
-    │
-    ├── HybridRetriever
-    │   ├── Semantic search  (ChromaDB embeddings)
-    │   └── Keyword search   (BM25 for exact article references)
-    │
-    ├── LLM Generation (OpenAI / gpt-4o-mini)
-    │
-    └── Self-Reflection Node
-            ├── Are citations present? Is the answer grounded?
-            ├── No  → loop back (max 10 iterations)
-            └── Yes → finalize response
-    │
-    ▼
-Answer + Citations
-    ├── Redis  → session log (conversation history)
-    └── Neo4j  → knowledge graph update (entity relationships)
-    │
-    ▼
-Response returned to user
+HTTP response  { answer, sources[], citations[], iterations }
 ```
+
+A few things the diagram makes explicit that are worth calling out:
+
+- **Embeddings are a library call, not a service.** `sentence-transformers` runs in-process inside the retriever — there's no separate embedding server to deploy.
+- **The agent is sequential, not parallel.** Retrieve completes before generate starts; generate completes before reflect starts. The arrows are data, not concurrent paths.
+- **Reflection is what makes it "agentic".** A plain RAG pipeline stops at Step 2. The reflection node re-checks grounding and can send the state back to Step 1 with a refined query. This is the loop that LangGraph's conditional edges enable.
+- **Hybrid retrieval** means every query hits both ChromaDB (semantic) and a BM25 scorer (keyword). Results are merged and reranked before being handed to the LLM — this is what makes article-number queries like "GDPR Article 17" land on the right chunk.
 
 ### Design Decisions
 

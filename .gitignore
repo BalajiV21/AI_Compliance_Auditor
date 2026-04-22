@@ -87,6 +87,10 @@ quickstart.md
 # Generated PDFs (guides, project details)
 *.pdf
 
+# PDF generator scripts (local reference only, not part of the app)
+generate_aws_beginner_guide.py
+generate_aws_guide.py
+
 # AWS credentials and SSH keys — NEVER commit
 AWS_setup/
 *.pem
