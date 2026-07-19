@@ -35,12 +35,11 @@ def check_api_health():
         return False
 
 
-def query_api(query: str, session_id: str, use_simple: bool = False):
+def query_api(query: str, session_id: str):
     """Send query to API"""
     payload = {
         "query": query,
         "session_id": session_id,
-        "use_simple_agent": use_simple
     }
 
     response = requests.post(f"{API_URL}/query", json=payload)
@@ -96,13 +95,6 @@ def main():
             help="Unique identifier for conversation tracking"
         )
         st.session_state.session_id = session_id
-
-        # Agent mode
-        use_simple = st.checkbox(
-            "Simple Agent Mode",
-            value=False,
-            help="Use faster simple agent instead of full agentic RAG"
-        )
 
         # Clear conversation
         if st.button(" Clear Conversation"):
@@ -167,7 +159,7 @@ def main():
                 st.warning("Please enter a question")
             else:
                 with st.spinner(" Thinking..."):
-                    result = query_api(query, session_id, use_simple)
+                    result = query_api(query, session_id)
 
                     if result:
                         # Display answer

@@ -59,7 +59,6 @@ Everything except the LLM call runs locally. Documents, embeddings, and session 
 | LLM | OpenAI (gpt-4o-mini) | Fast, cheap, strong reasoning — ~$0.15 per 1M input tokens |
 | Vector DB | ChromaDB | Semantic document search and storage |
 | Session Memory | Redis | Conversation context across queries |
-| Knowledge Graph | Neo4j | Entity relationships between regulations and requirements |
 | API | FastAPI | REST endpoints for the agent |
 | UI | Streamlit | Frontend for running compliance queries |
 | Evaluation | RAGAS | Measuring faithfulness, recall, and citation accuracy |
@@ -119,8 +118,7 @@ ComplianceAgent  ── LangGraph StateGraph ───────────�
     ▼                          (max N iterations, default 3)
 Final answer + citations
     │
-    ├──►  Redis   (session history keyed by session_id; in-memory fallback if Redis is down)
-    └──►  Neo4j   (regulation → article → requirement relationships; optional, skipped if offline)
+    └──►  Redis   (session history keyed by session_id; in-memory fallback if Redis is down)
     │
     ▼
 HTTP response  { answer, sources[], citations[], iterations }
@@ -141,9 +139,6 @@ LangChain's older agent API doesn't give you fine-grained control over the execu
 **Why hybrid retrieval?**
 Semantic search alone wasn't good enough. When someone asks about "Article 17 of GDPR", pure vector similarity often surfaces broadly related content about data rights — not the specific article. BM25 keyword matching catches exact article references that semantic search misses. Running both and reranking the combined results gave noticeably better precision on targeted queries.
 
-**Why Neo4j for the knowledge graph?**
-Compliance data has natural graph structure: Articles contain Requirements, Requirements apply to Entities, Entities overlap across regulations. Querying these relationships in a relational DB would mean multi-level joins. In Neo4j it's a two-hop traversal. For cross-regulation queries ("what do both GDPR and HIPAA say about breach notification?"), this makes a real difference.
-
 **Why Redis for session memory?**
 Fast key-value lookup for conversation history per session ID. The system degrades gracefully if Redis isn't running — it falls back to in-memory storage, which works fine for single-session use.
 
@@ -161,10 +156,6 @@ Fast key-value lookup for conversation history per session ID. The system degrad
 - **Redis** — session memory. Without it, the system uses in-memory fallback.
   - Windows: [download here](https://github.com/microsoftarchive/redis/releases)
   - Mac/Linux: `brew install redis` or `apt-get install redis-server`
-
-- **Neo4j** — knowledge graph. Without it, cross-regulation reasoning is disabled.
-  - Docker: `docker run -p 7474:7474 -p 7687:7687 neo4j`
-  - Or [download directly](https://neo4j.com/download/)
 
 ---
 
@@ -320,8 +311,8 @@ The hardest part was defining what "good enough" means for the reflection step. 
 **Hybrid retrieval was harder to tune than I expected**
 Combining semantic and BM25 results means you need a reranking step, otherwise you just get two noisy lists merged together. I tried a few approaches before settling on a weighted combination that prioritizes semantic similarity but bumps up results with exact article-number matches. Queries that mix a conceptual question with a specific article reference are still the trickiest case.
 
-**Redis and Neo4j add real operational complexity**
-Early on I had no fallback logic, which meant the system crashed if either service wasn't running. Adding graceful degradation — in-memory fallback for Redis, disabling graph features if Neo4j is unavailable — made it actually usable without the full stack. If I were starting over, I'd design optional services from day one instead of retrofitting it.
+**Redis adds real operational complexity**
+Early on I had no fallback logic, which meant the system crashed if Redis wasn't running. Adding an in-memory fallback made it actually usable without the full stack. If I were starting over, I'd design optional services from day one instead of retrofitting it.
 
 **Chunking strategy matters more than the model**
 I spent a lot of time tuning the LLM and almost no time on chunking — until I realized retrieval quality was the bottleneck, not generation. Switching from fixed-size chunks to semantic chunking (splitting on paragraph and section boundaries) improved context recall noticeably. The lesson was pretty clear: no amount of agent sophistication fixes bad retrieval.
@@ -331,7 +322,7 @@ I spent a lot of time tuning the LLM and almost no time on chunking — until I 
 ## What's Next
 
 - **Streaming responses** — the current setup blocks until the full answer is ready; streaming would make long agent chains feel much more responsive
-- **Docker Compose setup** — containerizing the whole stack (API + Redis + Neo4j + ChromaDB) would make it one command to run
+- **Docker Compose setup** — containerizing the whole stack (API + Redis + ChromaDB) would make it one command to run
 - **User document upload** — right now you drop PDFs into `data/raw/` and run ingestion manually; a drag-and-drop upload in the UI would make this usable by non-technical teams
 - **API authentication** — no auth currently, which is fine locally but a blocker for any real deployment
 
@@ -345,9 +336,8 @@ AI_Compliance_Auditor/
 │   ├── agents/              # LangGraph agent and tools
 │   │   ├── compliance_agent.py
 │   │   └── tools.py
-│   ├── memory/              # Redis and Neo4j integrations
-│   │   ├── redis_memory.py
-│   │   └── neo4j_graph.py
+│   ├── memory/              # Redis integration
+│   │   └── redis_memory.py
 │   ├── retrieval/           # ChromaDB and hybrid retrieval
 │   │   ├── vector_store.py
 │   │   └── retriever.py

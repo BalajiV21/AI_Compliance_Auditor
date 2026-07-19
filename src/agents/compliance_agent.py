@@ -349,65 +349,6 @@ Provide a brief reflection (2-3 sentences) on whether the answer needs improveme
             yield state
 
 
-class SimpleComplianceAgent:
-    """
-    Simplified compliance agent without complex graph logic
-    Good for basic queries
-    """
-
-    def __init__(self, retriever, model_name: str = "gpt-4o-mini",
-                 api_key: str = None, base_url: str = None, temperature: float = 0.1):
-        self.retriever = retriever
-        api_key = api_key or (getattr(_settings, "OPENAI_API_KEY", None) if _settings else None) \
-                  or os.getenv("OPENAI_API_KEY")
-        base_url = base_url or (getattr(_settings, "OPENAI_BASE_URL", None) if _settings else None) \
-                   or os.getenv("OPENAI_BASE_URL")
-        if not api_key:
-            raise ValueError(
-                "OpenAI API key not set. Put OPENAI_API_KEY in .env or pass api_key=..."
-            )
-        self.llm = ChatOpenAI(
-            model=model_name, temperature=temperature,
-            api_key=api_key, base_url=base_url,
-        )
-
-    def answer(self, query: str) -> str:
-        """
-        Answer a compliance question
-
-        Args:
-            query: The question
-
-        Returns:
-            Answer with citations
-        """
-        logger.info(f"Simple agent answering: {query}")
-
-        # Retrieve documents
-        docs = self.retriever.retrieve(query, top_k=5)
-
-        # Build context
-        context = "\n\n---\n\n".join([
-            f"{doc.get('citation', '')}:\n{doc['content']}"
-            for doc in docs
-        ])
-
-        # Build prompt
-        prompt = f"""You are a compliance expert. Answer the following question using ONLY the information provided in the context. Always cite your sources.
-
-Question: {query}
-
-Context:
-{context}
-
-Answer (with citations):"""
-
-        # Generate answer
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-
-        return response.content
-
-
 if __name__ == "__main__":
     # Test the agent
     from pathlib import Path

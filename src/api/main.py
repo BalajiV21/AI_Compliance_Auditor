@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from loguru import logger
 import uuid
+import json
 from datetime import datetime
+from sse_starlette.sse import EventSourceResponse
 
 # Import project components#
 #import sys#
@@ -22,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from config import settings
 from retrieval import VectorStore, CitationRetriever
-from agents import ComplianceAgent, SimpleComplianceAgent, create_langchain_tools
+from agents import ComplianceAgent, create_langchain_tools
 from memory import RedisMemory, ConversationBufferMemory
 
 # Initialize FastAPI app
@@ -52,7 +54,6 @@ memory = None
 class QueryRequest(BaseModel):
     query: str = Field(..., description="Compliance question")
     session_id: Optional[str] = Field(None, description="Session ID for conversation context")
-    use_simple_agent: bool = Field(False, description="Use simple agent instead of full agentic RAG")
     document_type: Optional[str] = Field(None, description="Filter by document type (GDPR, HIPAA, SOC2)")
 
 
@@ -184,31 +185,10 @@ async def query_compliance(request: QueryRequest):
         else:
             memory.add_message(session_id, "user", request.query)
 
-        # Use appropriate agent
-        if request.use_simple_agent:
-            simple_agent = SimpleComplianceAgent(
-                retriever=retriever,
-                model_name=settings.OPENAI_MODEL
-            )
-            answer = simple_agent.answer(request.query)
-
-            # Get sources from retriever
-            sources = retriever.retrieve(request.query, top_k=3)
-
-            result = {
-                'query': request.query,
-                'answer': answer,
-                'sources': sources,
-                'session_id': session_id,
-                'iterations': None,
-                'reflection': None,
-                'timestamp': datetime.now().isoformat()
-            }
-        else:
-            # Use full agentic RAG
-            result = agent.run(request.query)
-            result['session_id'] = session_id
-            result['timestamp'] = datetime.now().isoformat()
+        # Run the agentic RAG pipeline
+        result = agent.run(request.query)
+        result['session_id'] = session_id
+        result['timestamp'] = datetime.now().isoformat()
 
         # Store assistant response in memory
         if isinstance(memory, RedisMemory):
@@ -223,6 +203,114 @@ async def query_compliance(request: QueryRequest):
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _serialize_chunk(doc: Dict) -> Dict:
+    """Trim a retrieved chunk to what the frontend needs to render + highlight."""
+    md = doc.get('metadata', {}) or {}
+    return {
+        'content': doc.get('content', ''),
+        'citation': doc.get('citation', ''),
+        'similarity_score': doc.get('similarity_score', 0.0),
+        'filename': md.get('filename', ''),
+        'document_type': md.get('document_type', ''),
+        'page_number': md.get('page_number', 1),
+        'section': md.get('section', ''),
+    }
+
+
+def _store_message(session_id: str, role: str, content: str) -> None:
+    """Persist a message using whichever memory backend is active."""
+    if memory is None:
+        return
+    if isinstance(memory, RedisMemory):
+        memory.store_message(session_id, role, content)
+    else:
+        memory.add_message(session_id, role, content)
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    """
+    Stream agent execution as Server-Sent Events.
+
+    Emits phase-completion events so the frontend can render a live workflow trace:
+      start       → session_id
+      retrieved   → chunks (with page_number for PDF highlighting)
+      generating  → LLM call has completed a pass
+      reflecting  → reflection text + iteration count (may fire 0..N times)
+      answer      → final answer + sources
+      done        → stream close
+    """
+    session_id = request.session_id or str(uuid.uuid4())
+    logger.info(f"Streaming query: '{request.query}' (session: {session_id})")
+
+    _store_message(session_id, "user", request.query)
+
+    async def event_generator():
+        final_answer = ""
+        final_sources: List[Dict] = []
+        iterations = 0
+        reflection = ""
+
+        try:
+            yield {
+                "event": "start",
+                "data": json.dumps({"session_id": session_id, "query": request.query}),
+            }
+
+            for step in agent.stream(request.query):
+                for node_name, state in step.items():
+                    if node_name == "retrieve":
+                        docs = state.get("retrieved_docs", []) or []
+                        final_sources = docs
+                        yield {
+                            "event": "retrieved",
+                            "data": json.dumps({
+                                "count": len(docs),
+                                "chunks": [_serialize_chunk(d) for d in docs],
+                            }),
+                        }
+                    elif node_name == "generate":
+                        if state.get("answer"):
+                            final_answer = state["answer"]
+                        yield {
+                            "event": "generating",
+                            "data": json.dumps({"has_answer": bool(final_answer)}),
+                        }
+                    elif node_name == "reflect":
+                        reflection = state.get("reflection", "") or ""
+                        iterations = state.get("iterations", 0) or 0
+                        yield {
+                            "event": "reflecting",
+                            "data": json.dumps({
+                                "iteration": iterations,
+                                "reflection": reflection,
+                                "needs_retry": bool(state.get("needs_reflection", False)),
+                            }),
+                        }
+
+            yield {
+                "event": "answer",
+                "data": json.dumps({
+                    "text": final_answer,
+                    "sources": [_serialize_chunk(d) for d in final_sources],
+                    "iterations": iterations,
+                    "reflection": reflection,
+                    "session_id": session_id,
+                    "timestamp": datetime.now().isoformat(),
+                }),
+            }
+
+            _store_message(session_id, "assistant", final_answer)
+
+            yield {"event": "done", "data": json.dumps({})}
+
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            yield {"event": "error", "data": json.dumps({"error": str(e)})}
+
+    return EventSourceResponse(event_generator())
 
 
 @app.get("/search", response_model=List[Dict])

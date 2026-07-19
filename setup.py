@@ -1,6 +1,9 @@
 """
-Ultra-Lightweight Setup Script
-No embeddings, no heavy models - just stores text directly in ChromaDB
+Ingestion setup for the Agentic Compliance Auditor.
+
+Uses the real DocumentLoader + RegulationChunker so metadata (including
+page_number for PDFs) flows into ChromaDB. Wipes the collection first
+so a re-run always produces a clean, consistent index.
 """
 import sys
 import gc
@@ -11,128 +14,105 @@ sys.path.append(str(Path(__file__).parent / "src"))
 from loguru import logger
 import chromadb
 from chromadb.config import Settings
+import json
 
-# Configuration
-CHROMA_DIR  = "./data/chroma_db"
-SAMPLE_DIR  = "./data/sample_docs"
-COLLECTION  = "compliance_documents"
-CHUNK_SIZE  = 150   # Very small chunks
+from ingestion.document_loader import DocumentLoader
+from ingestion.chunker import RegulationChunker
+
+CHROMA_DIR    = "./data/chroma_db"
+SAMPLE_DIR    = "./data/sample_docs"
+COLLECTION    = "compliance_documents"
+CHUNK_SIZE    = 512
+CHUNK_OVERLAP = 50
 
 
-def infer_doc_type(filename: str) -> str:
-    f = filename.lower()
-    if   "gdpr"  in f: return "GDPR"
-    elif "hipaa" in f: return "HIPAA"
-    elif "soc2"  in f: return "SOC2"
-    else:              return "General"
+def _clean_metadata(md: dict) -> dict:
+    """Coerce chunk metadata into Chroma-compatible primitives."""
+    out = {}
+    for k, v in md.items():
+        if v is None:
+            out[k] = ""
+        elif isinstance(v, (str, int, float, bool)):
+            out[k] = v
+        elif isinstance(v, (list, dict)):
+            out[k] = json.dumps(v)
+        else:
+            out[k] = str(v)
+    return out
 
 
 def main():
     print("=" * 60)
-    print("Agentic Compliance Auditor - Ultra Lite Setup")
+    print("Agentic Compliance Auditor - Ingestion")
     print("=" * 60)
 
-    # Step 1: Setup ChromaDB first
-    print("\n Setting up ChromaDB...")
+    print("\n Resetting ChromaDB...")
     Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
-
     client = chromadb.PersistentClient(
         path=CHROMA_DIR,
         settings=Settings(anonymized_telemetry=False, allow_reset=True),
     )
-
     try:
         client.delete_collection(COLLECTION)
     except Exception:
         pass
-
     collection = client.create_collection(
         name=COLLECTION,
         metadata={"hnsw:space": "cosine"},
     )
     print("  ChromaDB ready")
 
-    # Step 2: Process one file at a time to save RAM
-    print("\n Processing documents one at a time...")
+    loader = DocumentLoader()
+    chunker = RegulationChunker(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+
     sample_path = Path(SAMPLE_DIR)
+    if not sample_path.exists():
+        print(f"  Sample dir missing: {sample_path}")
+        return False
+
     total_chunks = 0
 
-    for txt_file in sample_path.glob("*.txt"):
-        doc_type = infer_doc_type(txt_file.name)
-        print(f"\n  Loading: {txt_file.name}")
+    for file_path in sorted(sample_path.iterdir()):
+        if not file_path.is_file() or file_path.suffix.lower() not in loader.supported_formats:
+            continue
 
-        # Read file
-        text = txt_file.read_text(encoding="utf-8")
-        lines = text.split("\n")
+        print(f"\n  Loading: {file_path.name}")
+        try:
+            document = loader.load_document(str(file_path))
+        except Exception as e:
+            print(f"  Skipped ({e})")
+            continue
 
-        # Build small chunks line by line
-        chunks, ids, metas = [], [], []
-        current = ""
-        chunk_idx = 0
-
-        for line in lines:
-            current += line + "\n"
-            if len(current) >= CHUNK_SIZE:
-                chunk_text = current.strip()
-                if chunk_text:
-                    safe_name = txt_file.name.replace(".", "_")
-                    chunks.append(chunk_text)
-                    ids.append(f"{safe_name}_{chunk_idx}")
-                    metas.append({
-                        "filename": txt_file.name,
-                        "document_type": doc_type,
-                        "chunk_index": chunk_idx,
-                    })
-                    chunk_idx += 1
-                current = ""
-
-        # Add leftover text
-        if current.strip():
-            safe_name = txt_file.name.replace(".", "_")
-            chunks.append(current.strip())
-            ids.append(f"{safe_name}_{chunk_idx}")
-            metas.append({
-                "filename": txt_file.name,
-                "document_type": doc_type,
-                "chunk_index": chunk_idx,
-            })
-
+        chunks = chunker.chunk_document(document)
         print(f"  Created {len(chunks)} chunks")
 
-        # Insert one chunk at a time to save RAM
         inserted = 0
-        for i in range(len(chunks)):
+        for chunk in chunks:
             try:
                 collection.add(
-                    ids       =[ids[i]],
-                    documents =[chunks[i]],
-                    metadatas =[metas[i]],
+                    ids=[chunk.chunk_id],
+                    documents=[chunk.content],
+                    metadatas=[_clean_metadata(chunk.metadata)],
                 )
                 inserted += 1
             except Exception as e:
-                print(f"  Warning: skipped chunk {i}: {e}")
+                print(f"  Warning: skipped chunk {chunk.chunk_id}: {e}")
 
         print(f"  Stored {inserted} chunks")
         total_chunks += inserted
 
-        # Free memory after each file
-        del text, lines, chunks, ids, metas
+        del document, chunks
         gc.collect()
 
-    # Step 3: Verify
-    print(f"\n Verifying...")
+    print("\n Verifying...")
     count = collection.count()
     print(f"  Total chunks in DB: {count}")
 
-    # Step 4: Test search
     print("\n Testing search...")
-    results = collection.query(
-        query_texts=["data retention"],
-        n_results=1
-    )
-
+    results = collection.query(query_texts=["data retention"], n_results=1)
     if results["ids"] and results["ids"][0]:
-        print("  Search working!")
+        md = results["metadatas"][0][0]
+        print(f"  Top hit: {md.get('filename')}  page={md.get('page_number')}")
     else:
         print("  Warning: search returned no results")
 
@@ -141,9 +121,11 @@ def main():
     print("=" * 60)
     print(f"  Total chunks stored: {count}")
     print("\nNext steps:")
-    print("  1. Set OPENAI_API_KEY in .env (get key at https://platform.openai.com/api-keys)")
-    print("  2. Start API:     cd src/api && python main.py")
-    print("  3. Start UI:      cd ui && streamlit run streamlit_app.py")
+    print("  1. Confirm OPENAI_API_KEY is set in .env")
+    print("  2. Start API:     python src/api/main.py")
+    print("  3. Curl stream:   curl -N -X POST http://localhost:8000/query/stream \\")
+    print("                        -H 'Content-Type: application/json' \\")
+    print("                        -d '{\"query\":\"GDPR Article 17?\"}'")
     return True
 
 

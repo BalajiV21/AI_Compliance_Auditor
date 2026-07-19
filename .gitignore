@@ -84,12 +84,18 @@ read_doc.py
 run_all.bat
 quickstart.md
 
-# Generated PDFs (guides, project details)
-*.pdf
+# Bulky one-off PDFs at repo root only (don't hide docs/ or frontend/public/ PDFs)
+/*.pdf
 
 # PDF generator scripts (local reference only, not part of the app)
 generate_aws_beginner_guide.py
 generate_aws_guide.py
+
+# Node / Vite frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
 
 # AWS credentials and SSH keys — NEVER commit
 AWS_setup/

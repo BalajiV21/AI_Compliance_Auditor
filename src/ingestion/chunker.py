@@ -59,36 +59,49 @@ class SemanticChunker:
         Chunk a document into semantically meaningful pieces
 
         Args:
-            document: Document dictionary with 'text' and 'metadata' keys
+            document: Document dictionary with 'text' and 'metadata' keys.
+                     PDFs also include a 'pages' key ([{page, content}, ...]) —
+                     when present, chunks are produced per-page so each chunk
+                     carries a page_number for frontend PDF highlighting.
 
         Returns:
             List of Chunk objects
         """
-        text = document['text']
         metadata = document['metadata']
+        pages = document.get('pages')
 
         logger.info(f"Chunking document: {metadata.get('filename', 'unknown')}")
-
-        # Extract sections if present (for regulatory documents)
-        sections = self._extract_sections(text)
 
         chunks = []
         chunk_counter = 0
 
-        if sections:
-            # Chunk each section separately to preserve context
-            for section_name, section_text in sections:
-                section_chunks = self._chunk_text(
-                    section_text,
-                    metadata,
-                    section_name=section_name,
-                    start_id=chunk_counter
+        if pages:
+            # Per-page chunking preserves page_number for citation highlighting
+            for page in pages:
+                page_metadata = {**metadata, 'page_number': page['page']}
+                page_chunks = self._chunk_text(
+                    page['content'],
+                    page_metadata,
+                    start_id=chunk_counter,
                 )
-                chunks.extend(section_chunks)
-                chunk_counter += len(section_chunks)
+                chunks.extend(page_chunks)
+                chunk_counter += len(page_chunks)
         else:
-            # Chunk entire document
-            chunks = self._chunk_text(text, metadata, start_id=0)
+            # Non-paged formats (txt, docx) default to page_number = 1
+            metadata_with_page = {**metadata, 'page_number': 1}
+            sections = self._extract_sections(document['text'])
+            if sections:
+                for section_name, section_text in sections:
+                    section_chunks = self._chunk_text(
+                        section_text,
+                        metadata_with_page,
+                        section_name=section_name,
+                        start_id=chunk_counter,
+                    )
+                    chunks.extend(section_chunks)
+                    chunk_counter += len(section_chunks)
+            else:
+                chunks = self._chunk_text(document['text'], metadata_with_page, start_id=0)
 
         logger.info(f"Created {len(chunks)} chunks")
         return chunks

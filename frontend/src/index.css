@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #0b1220;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Allow text selection inside the PDF text layer */
+.react-pdf__Page__textContent { user-select: text; }
+
+/* Cited-passage highlight overlaying pdf.js text-layer spans */
+.pdf-highlight {
+  background: rgba(250, 204, 21, 0.55);
+  color: transparent;
+  border-radius: 2px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(202, 138, 4, 0.6);
+}
+
+/* pdf.js text layer must stay transparent for highlighting to look right */
+.react-pdf__Page { position: relative; }
+.react-pdf__Page__canvas { display: block; }

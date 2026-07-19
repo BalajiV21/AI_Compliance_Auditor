@@ -31,10 +31,6 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379)
     REDIS_DB: int = Field(default=0)
 
-    NEO4J_URI: str = Field(default="bolt://localhost:7687")
-    NEO4J_USER: str = Field(default="neo4j")
-    NEO4J_PASSWORD: str = Field(default="password")
-
     # API Configuration
     API_HOST: str = Field(default="0.0.0.0")
     API_PORT: int = Field(default=8000)
