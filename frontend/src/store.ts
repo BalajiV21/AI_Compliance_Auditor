@@ -108,7 +108,13 @@ function applyEvent(
       set({ trace, reflection: evt.data.reflection, iterations: evt.data.iteration })
       break
     case 'answer':
+      // When self-reflection is disabled server-side, the 'reflecting' event
+      // never fires. Close out any still-active step so the spinner stops.
+      for (const step of trace) {
+        if (step.status !== 'done') mark(step.phase, 'done', step.phase === 'reflect' ? 'skipped' : step.detail)
+      }
       set({
+        trace,
         answer: evt.data.text,
         iterations: evt.data.iterations,
         reflection: evt.data.reflection,
