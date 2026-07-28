@@ -38,11 +38,13 @@ export function PdfViewer() {
     setNumPages(0)
   }, [regulation])
 
-  // Substrings we want highlighted on the current page
+  // Substrings we want highlighted on the current page.
+  // Match by document_type (works whether ingest source was .txt or .pdf) so real
+  // backend chunks with filename="GDPR_Sample.txt" still light up in GDPR.pdf.
   const highlightTerms = useMemo(
     () =>
       chunks
-        .filter((c) => c.filename === `${regulation}.pdf` && c.page_number === currentPage)
+        .filter((c) => c.document_type === regulation && c.page_number === currentPage)
         .map((c) => c.content.trim())
         .filter((s) => s.length > 15), // avoid noise
     [chunks, regulation, currentPage],
