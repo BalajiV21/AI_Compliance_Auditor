@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # Vector Database
     CHROMA_PERSIST_DIR: str = Field(default=str((Path(__file__).parent.parent / "data" / "chroma_db").resolve()))
-    EMBEDDING_MODEL: str = Field(default="all-MiniLM-L6-v2")
+    EMBEDDING_MODEL: str = Field(default="text-embedding-3-small")
 
     # Memory Systems
     REDIS_HOST: str = Field(default="localhost")
