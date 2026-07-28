@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import type { Regulation, RetrievedChunk, StreamEvent, TraceStep } from './types'
 import { mockEventStream } from './mockStream'
+import { realEventStream } from './realStream'
+
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+const eventStream = USE_MOCK ? mockEventStream : realEventStream
 
 interface AppState {
   regulation: Regulation
@@ -62,7 +66,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isStreaming: true, trace: [{ phase: 'retrieve', status: 'active' }, { phase: 'generate', status: 'pending' }, { phase: 'reflect', status: 'pending' }] })
 
     try {
-      for await (const evt of mockEventStream(q)) {
+      for await (const evt of eventStream(q)) {
         applyEvent(evt, set, get)
       }
     } catch (e: any) {
