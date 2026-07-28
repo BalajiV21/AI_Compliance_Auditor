@@ -103,17 +103,21 @@ def main():
         chunks = chunker.chunk_document(document)
         print(f"  Created {len(chunks)} chunks")
 
+        # Batch-insert so we make one OpenAI embedding call per batch instead of per chunk.
+        BATCH = 100
         inserted = 0
-        for chunk in chunks:
+        for start in range(0, len(chunks), BATCH):
+            batch = chunks[start:start + BATCH]
             try:
                 collection.add(
-                    ids=[chunk.chunk_id],
-                    documents=[chunk.content],
-                    metadatas=[_clean_metadata(chunk.metadata)],
+                    ids=[c.chunk_id for c in batch],
+                    documents=[c.content for c in batch],
+                    metadatas=[_clean_metadata(c.metadata) for c in batch],
                 )
-                inserted += 1
+                inserted += len(batch)
+                print(f"    embedded batch {start // BATCH + 1} ({len(batch)} chunks)")
             except Exception as e:
-                print(f"  Warning: skipped chunk {chunk.chunk_id}: {e}")
+                print(f"  Warning: batch starting at {start} failed: {e}")
 
         print(f"  Stored {inserted} chunks")
         total_chunks += inserted
