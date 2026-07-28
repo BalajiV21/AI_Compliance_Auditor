@@ -161,6 +161,8 @@ class SemanticChunker:
         chunks = []
         start_pos = 0
         chunk_id = start_id
+        # Guarantee real forward progress even when the separator lands close to start.
+        MIN_STEP = max(1, self.chunk_size // 4)
 
         while start_pos < len(text):
             # Calculate end position for this chunk
@@ -174,7 +176,9 @@ class SemanticChunker:
                 best_split = end_pos
                 for separator in self.separators:
                     last_sep = chunk_text.rfind(separator)
-                    if last_sep != -1:
+                    # Only accept a split that actually moves us meaningfully forward,
+                    # otherwise the overlap step below can loop forever.
+                    if last_sep != -1 and last_sep + len(separator) >= MIN_STEP:
                         best_split = start_pos + last_sep + len(separator)
                         break
 
@@ -207,12 +211,12 @@ class SemanticChunker:
 
                 chunk_id += 1
 
-            # Move to next chunk with overlap
-            start_pos = end_pos - self.chunk_overlap
-
-            # Ensure we make progress
-            if start_pos >= end_pos:
-                start_pos = end_pos
+            # Move to next chunk with overlap, but always net-forward by MIN_STEP.
+            # (Without this the loop can oscillate between the same two boundaries.)
+            prev_start = start_pos
+            start_pos = max(end_pos - self.chunk_overlap, prev_start + MIN_STEP)
+            if start_pos >= len(text):
+                break
 
         return chunks
 
