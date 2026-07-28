@@ -5,25 +5,31 @@ Uses the real DocumentLoader + RegulationChunker so metadata (including
 page_number for PDFs) flows into ChromaDB. Wipes the collection first
 so a re-run always produces a clean, consistent index.
 """
+import os
 import sys
 import gc
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent / "src"))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from loguru import logger
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils import embedding_functions
 import json
 
 from ingestion.document_loader import DocumentLoader
 from ingestion.chunker import RegulationChunker
 
-CHROMA_DIR    = "./data/chroma_db"
-SAMPLE_DIR    = "./data/sample_docs"
-COLLECTION    = "compliance_documents"
-CHUNK_SIZE    = 512
-CHUNK_OVERLAP = 50
+CHROMA_DIR      = "./data/chroma_db"
+SAMPLE_DIR      = "./data/sample_docs"
+COLLECTION      = "compliance_documents"
+CHUNK_SIZE      = 512
+CHUNK_OVERLAP   = 50
+EMBEDDING_MODEL = "text-embedding-3-small"  # OpenAI hosted, ~1 cent per full ingest
 
 
 def _clean_metadata(md: dict) -> dict:
@@ -46,6 +52,11 @@ def main():
     print("Agentic Compliance Auditor - Ingestion")
     print("=" * 60)
 
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("  ERROR: OPENAI_API_KEY not set (.env or environment).")
+        return False
+
     print("\n Resetting ChromaDB...")
     Path(CHROMA_DIR).mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(
@@ -56,11 +67,17 @@ def main():
         client.delete_collection(COLLECTION)
     except Exception:
         pass
+
+    openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=api_key,
+        model_name=EMBEDDING_MODEL,
+    )
     collection = client.create_collection(
         name=COLLECTION,
+        embedding_function=openai_ef,
         metadata={"hnsw:space": "cosine"},
     )
-    print("  ChromaDB ready")
+    print(f"  ChromaDB ready (using OpenAI {EMBEDDING_MODEL})")
 
     loader = DocumentLoader()
     chunker = RegulationChunker(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)

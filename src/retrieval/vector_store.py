@@ -1,56 +1,72 @@
 """
-Vector store implementation using ChromaDB
-Handles document embeddings and semantic search
+Vector store implementation using ChromaDB with OpenAI embeddings.
+
+Uses OpenAI's text-embedding-3-small so the API/setup do not need to load
+sentence-transformers locally — that keeps RAM footprint tiny (a few MB
+instead of ~500 MB) and makes ingestion feasible on modest hardware like
+a t3.medium EC2.
 """
+import os
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils import embedding_functions
 from typing import List, Dict, Optional
 from loguru import logger
-from sentence_transformers import SentenceTransformer
 from pathlib import Path
 import json
+
+try:
+    from config import settings as _settings
+except Exception:
+    _settings = None
+
+
+EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+def _resolve_openai_key() -> str:
+    key = (getattr(_settings, "OPENAI_API_KEY", None) if _settings else None) \
+          or os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise ValueError(
+            "OPENAI_API_KEY not set. Add it to .env or export it before using VectorStore."
+        )
+    return key
 
 
 class VectorStore:
     """
-    ChromaDB-based vector store for semantic search
+    ChromaDB-based vector store for semantic search.
+
+    Embeddings are computed by OpenAI (text-embedding-3-small) — no local
+    ML model is loaded, so this class is safe to instantiate on tiny hosts.
     """
 
     def __init__(
         self,
         persist_directory: str,
         collection_name: str = "compliance_documents",
-        embedding_model: str = "all-MiniLM-L6-v2"
+        embedding_model: str = EMBEDDING_MODEL,
     ):
-        """
-        Initialize vector store
-
-        Args:
-            persist_directory: Directory to persist ChromaDB data
-            collection_name: Name of the collection
-            embedding_model: Name of the sentence transformer model
-        """
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
-
         self.collection_name = collection_name
 
-        # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
             path=str(self.persist_directory),
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
+            settings=Settings(anonymized_telemetry=False, allow_reset=True),
         )
 
-        # Initialize embedding model
-        logger.info(f"Loading embedding model: {embedding_model}")
-        self.embedding_model = SentenceTransformer(embedding_model)
+        # OpenAI embedding function — Chroma calls it automatically on add/query.
+        logger.info(f"Using OpenAI embedding model: {embedding_model}")
+        self.embedding_fn = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=_resolve_openai_key(),
+            model_name=embedding_model,
+        )
 
-        # Get or create collection (cosine similarity for more intuitive relevance scores)
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
+            embedding_function=self.embedding_fn,
             metadata={
                 "description": "Compliance and regulatory documents",
                 "hnsw:space": "cosine",
@@ -60,38 +76,16 @@ class VectorStore:
         logger.info(f"Vector store initialized with collection: {collection_name}")
 
     def add_documents(self, chunks: List, batch_size: int = 100):
-        """
-        Add document chunks to the vector store
-
-        Args:
-            chunks: List of Chunk objects
-            batch_size: Number of chunks to process at once
-        """
+        """Add document chunks. Embeddings are produced by OpenAI via the collection's embedding_function."""
         logger.info(f"Adding {len(chunks)} chunks to vector store")
 
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
-
-            # Prepare data for batch
             ids = [chunk.chunk_id for chunk in batch]
             documents = [chunk.content for chunk in batch]
             metadatas = [self._prepare_metadata(chunk.metadata) for chunk in batch]
 
-            # Generate embeddings
-            embeddings = self.embedding_model.encode(
-                documents,
-                show_progress_bar=True,
-                convert_to_numpy=True
-            ).tolist()
-
-            # Add to collection
-            self.collection.add(
-                ids=ids,
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadatas
-            )
-
+            self.collection.add(ids=ids, documents=documents, metadatas=metadatas)
             logger.info(f"Added batch {i // batch_size + 1} ({len(batch)} chunks)")
 
         logger.info("All chunks added successfully")
@@ -137,23 +131,17 @@ class VectorStore:
         """
         logger.info(f"Searching for: '{query}' (top_k={top_k})")
 
-        # Generate query embedding
-        query_embedding = self.embedding_model.encode(
-            query,
-            convert_to_numpy=True
-        ).tolist()
-
         # Build where clause if filter provided
         where = None
         if filter_metadata:
             where = self._build_where_clause(filter_metadata)
 
-        # Search in collection
+        # Chroma calls our OpenAI embedding function for query_texts automatically.
         results = self.collection.query(
-            query_embeddings=[query_embedding],
+            query_texts=[query],
             n_results=top_k,
             where=where,
-            include=["documents", "metadatas", "distances"]
+            include=["documents", "metadatas", "distances"],
         )
 
         # Format results
