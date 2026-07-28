@@ -179,6 +179,60 @@ class VectorStore:
                 restored[key] = value
         return restored
 
+    def hybrid_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        keywords: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        """
+        Semantic search with an optional keyword boost.
+
+        Retrieves top_k * 2 semantic hits, then (if keywords supplied) reranks
+        by a light bonus per matching keyword. Falls back to plain semantic
+        search when no keywords are provided.
+        """
+        logger.info(f"Performing hybrid search: '{query}'")
+        semantic_results = self.search(query, top_k=top_k * 2)
+
+        if not keywords:
+            return semantic_results[:top_k]
+
+        for result in semantic_results:
+            content_lower = result['content'].lower()
+            keyword_matches = sum(1 for kw in keywords if kw.lower() in content_lower)
+            boost = 1.0 + (keyword_matches * 0.03)
+            result['similarity_score'] = min(1.0, result['similarity_score'] * boost)
+            result['keyword_matches'] = keyword_matches
+
+        semantic_results.sort(key=lambda x: x['similarity_score'], reverse=True)
+        return semantic_results[:top_k]
+
+    def get_collection_stats(self) -> Dict:
+        """Return basic stats about the collection."""
+        return {
+            'collection_name': self.collection_name,
+            'total_chunks': self.collection.count(),
+            'embedding_model': self.embedding_model,
+            'persist_directory': str(self.persist_directory),
+        }
+
+    def delete_collection(self) -> None:
+        """Delete the collection entirely."""
+        logger.warning(f"Deleting collection: {self.collection_name}")
+        self.client.delete_collection(name=self.collection_name)
+
+    def reset_collection(self) -> None:
+        """Delete and recreate the collection (clears all data)."""
+        self.delete_collection()
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={
+                "description": "Compliance and regulatory documents",
+                "hnsw:space": "cosine",
+            },
+        )
+
 
 class MultiCollectionVectorStore:
     """Manage multiple named VectorStore collections behind one persist directory."""
