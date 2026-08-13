@@ -296,23 +296,30 @@ print(result['answer'])
 
 ## Evaluation
 
-The system includes a RAGAS-based evaluation pipeline that measures retrieval and generation quality. Run it against your loaded documents:
-
-```bash
-cd src/evaluation
-python ragas_eval.py
-```
-
-This runs a set of test queries and scores the system across four dimensions:
+The system is evaluated with [RAGAS](https://docs.ragas.io/) across four dimensions using `gpt-4o-mini` as the LLM judge. Ten hand-picked compliance questions with reference answers spanning GDPR, HIPAA and SOC 2. Full per-question output lives in [docs/ragas_report.json](docs/ragas_report.json).
 
 | Metric | Score | What it measures |
 |---|---|---|
-| Faithfulness | — | Are answers grounded in retrieved docs, not hallucinated? |
-| Answer Relevancy | — | Does the answer actually address the question asked? |
-| Context Recall | — | Are the right chunks being retrieved? |
-| Citation Accuracy | — | Are article/section references correct? |
+| Faithfulness       | **0.88**  | Are the answer's claims grounded in the retrieved chunks (no hallucination)? |
+| Answer Relevancy   | **0.90**  | Does the answer actually address the question asked? |
+| Context Precision  | **0.81**  | Are the retrieved chunks relevant to the question? |
+| Context Recall     | **0.66**  | Do the retrieved chunks cover the full reference answer? |
 
-*Run `ragas_eval.py` to generate scores and fill in this table.*
+*(n = 10 questions, gpt-4o-mini for both generation and judging, text-embedding-3-small for retrieval.)*
+
+### Reading the numbers
+
+- **Faithfulness 0.88 + Answer Relevancy 0.90** — the model reliably answers what's asked and stays grounded in the retrieved text. Very few made-up claims.
+- **Context Precision 0.81** — the top-k retrieval mostly returns on-topic chunks, though a small fraction are noise.
+- **Context Recall 0.66** — the weakest score, and expected: the sample docs are *excerpts*, so some reference-answer content simply isn't in the corpus for retrieval to find. This is a data-coverage issue, not a retrieval-algorithm issue. Ingesting the full regulations (rather than the sample text files) would lift this substantially.
+
+### Reproducing
+
+```bash
+python src/evaluation/ragas_eval.py
+```
+
+Runs the agent on the test set, scores every prediction with RAGAS, and writes `docs/ragas_report.json` + `docs/ragas_report.csv`. Total cost per run: about $0.05 in OpenAI API charges.
 
 ---
 
@@ -334,8 +341,8 @@ I spent a lot of time tuning the LLM and almost no time on chunking — until I 
 
 ## What's Next
 
-- **RAGAS evaluation scores in the README** — the pipeline exists (`src/evaluation/ragas_eval.py`); measuring faithfulness, context recall, and citation accuracy on a labelled question set is the next portfolio-level improvement
 - **Chunker + retrieval unit tests** — a recent infinite-loop bug in the chunker (fixed) is exactly the class of issue a small pytest suite would catch pre-deploy
+- **Lift context recall (currently 0.66)** — ingest the full regulation texts rather than sample excerpts, so the reference-answer content actually exists in the corpus for retrieval to find
 - **True multi-agent** — split the single ComplianceAgent into per-regulation Specialists coordinated by a Planner/Supervisor, so cross-regulation questions get fanned-out in parallel instead of muddled through one prompt
 - **HTTPS via Let's Encrypt** — the site currently runs plain HTTP; adding TLS is a 30-minute nginx + certbot step
 - **API auth + rate limiting** — right now the streaming endpoint is public, meaning anyone with the URL can spend OpenAI credits on my key
