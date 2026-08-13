@@ -30,24 +30,15 @@ Everything except the LLM call runs locally. Documents, embeddings, and session 
 
 ---
 
+## Live Demo
+
+🔗 **[http://3.146.120.158/](http://3.146.120.158/)** — hosted on AWS EC2
+
 ## Screenshots
 
-### Main Interface
-![Main UI](img/Screenshot%202026-02-18%20030721.png)
+![Agentic Compliance Auditor UI](img/Screenshot%202026-08-13%20005103.png)
 
-### Query with Cited Answer
-![Query Result](img/Screenshot%202026-02-18%20031943.png)
-*The agent returns an answer grounded in retrieved chunks, with source document and article reference shown below.*
-
-### Citation Breakdown
-![Answer Detail](img/Screenshot%202026-02-18%20032039.png)
-*Each answer links back to the specific article and section it pulled from — no black-box responses.*
-
-### Conversation History
-![Conversation History](img/Screenshot%202026-02-18%20032248.png)
-
-### Settings & System Stats
-![Settings Sidebar](img/Screenshot%202026-02-18%20032306.png)
+*Left: the regulation PDF (HIPAA on page 3 of 8). Right: the live agent trace (retrieve → generate → reflect), the generated answer, and clickable citation chips that jump the PDF viewer to the source passage. Regulation tabs (GDPR / HIPAA / SOC2) in the top-right switch both the PDF and the retrieval scope.*
 
 ---
 
@@ -56,13 +47,17 @@ Everything except the LLM call runs locally. Documents, embeddings, and session 
 | Layer | Technology | Purpose |
 |---|---|---|
 | Agent Framework | LangGraph | State machine for multi-step reasoning and self-reflection loops |
-| LLM | OpenAI (gpt-4o-mini) | Fast, cheap, strong reasoning — ~$0.15 per 1M input tokens |
+| LLM | OpenAI gpt-4o-mini | Fast, cheap, strong reasoning — ~$0.15 per 1M input tokens |
+| Embeddings | OpenAI text-embedding-3-small | 1536-dim vectors, ~$0.02 per 1M tokens |
 | Vector DB | ChromaDB | Semantic document search and storage |
-| Session Memory | Redis | Conversation context across queries |
-| API | FastAPI | REST endpoints for the agent |
-| UI | Streamlit | Frontend for running compliance queries |
+| Session Memory | Redis (with in-memory fallback) | Conversation context across queries |
+| API | FastAPI + sse-starlette | REST + Server-Sent Events streaming |
+| Frontend | React + Vite + TypeScript, Tailwind CSS | Split-screen PDF viewer + live workflow trace |
+| PDF viewer | react-pdf (pdf.js) | Renders regulation PDFs with text-layer highlighting for cited passages |
+| State | Zustand | Small global store shared by frontend components |
+| Reverse proxy | nginx | Serves the built React app + reverse-proxies /api/* to FastAPI |
+| Hosting | AWS EC2 (t3.medium, Amazon Linux 2023) | Single-instance deploy, systemd-managed services |
 | Evaluation | RAGAS | Measuring faithfulness, recall, and citation accuracy |
-| Embeddings | Sentence Transformers (all-MiniLM-L6-v2) | Document and query embeddings |
 
 ### Supported Regulations
 
@@ -92,8 +87,8 @@ ComplianceAgent  ── LangGraph StateGraph ───────────�
     ▼                                                          │
   HybridRetriever                                              │
     ├── Semantic search  →  ChromaDB                           │
-    │    (query embedded in-process via sentence-transformers, │
-    │     all-MiniLM-L6-v2, 384-dim)                           │
+    │    (query embedded via OpenAI                            │
+    │     text-embedding-3-small, 1536-dim)                    │
     └── Keyword search   →  BM25 over chunk text               │
     │                                                          │
     │  top-k chunks + similarity scores + citations            │
@@ -195,7 +190,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_TEMPERATURE=0.1
 
 CHROMA_PERSIST_DIR=./data/chroma_db
-EMBEDDING_MODEL=all-MiniLM-L6-v2
+EMBEDDING_MODEL=text-embedding-3-small
 
 TOP_K_RESULTS=5
 CHUNK_SIZE=512
@@ -224,36 +219,54 @@ python src/api/main.py
 # Docs: http://localhost:8000/docs
 ```
 
-### 6. Launch the UI
+### 6. Run the frontend
 
 ```bash
-streamlit run ui/streamlit_app.py
-# Opens at http://localhost:8501
+cd frontend
+npm install
+npm run dev
+# Opens at http://localhost:5173
+# Uses the mock event stream by default (frontend/.env.development sets VITE_USE_MOCK=true),
+# so you can develop the UI without needing the backend running.
+```
+
+For a production build served against the real backend:
+
+```bash
+npm run build
+# Output in frontend/dist/ — serve with any static host + reverse-proxy /api/* to the FastAPI port.
 ```
 
 ---
 
 ## Usage
 
-### Streamlit UI
+### Web UI
 
-Open `http://localhost:8501`, type your question, click Submit.
+Open the app in your browser, type a compliance question, click **Ask**. The workflow trace on the right ticks through *Retrieving → Generating → Reflecting* as it works. When the answer appears, click a `[1] p.2` chip to jump the PDF to that page and highlight the exact cited passage.
 
 Questions to try:
-- *"What are the requirements for data retention under GDPR Article 17?"*
+- *"What is the right to erasure under GDPR Article 17?"*
+- *"What are the principles for processing personal data under GDPR Article 5?"*
 - *"How does HIPAA define Protected Health Information?"*
 - *"What security safeguards does SOC2 require for access controls?"*
 
-### REST API
+### REST API — streaming
+
+```bash
+curl -N -X POST "http://localhost:8000/query/stream" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is the right to erasure under GDPR?"}'
+```
+
+Emits Server-Sent Events: `start → retrieved → generating → reflecting → answer → done`.
+
+### REST API — synchronous
 
 ```bash
 curl -X POST "http://localhost:8000/query" \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "What is the right to erasure under GDPR?",
-    "session_id": "test_session",
-    "use_simple_agent": false
-  }'
+  -d '{"query": "What is the right to erasure under GDPR?", "session_id": "test_session"}'
 ```
 
 ### Python
@@ -321,24 +334,27 @@ I spent a lot of time tuning the LLM and almost no time on chunking — until I 
 
 ## What's Next
 
-- **Streaming responses** — the current setup blocks until the full answer is ready; streaming would make long agent chains feel much more responsive
-- **Docker Compose setup** — containerizing the whole stack (API + Redis + ChromaDB) would make it one command to run
-- **User document upload** — right now you drop PDFs into `data/raw/` and run ingestion manually; a drag-and-drop upload in the UI would make this usable by non-technical teams
-- **API authentication** — no auth currently, which is fine locally but a blocker for any real deployment
+- **RAGAS evaluation scores in the README** — the pipeline exists (`src/evaluation/ragas_eval.py`); measuring faithfulness, context recall, and citation accuracy on a labelled question set is the next portfolio-level improvement
+- **Chunker + retrieval unit tests** — a recent infinite-loop bug in the chunker (fixed) is exactly the class of issue a small pytest suite would catch pre-deploy
+- **True multi-agent** — split the single ComplianceAgent into per-regulation Specialists coordinated by a Planner/Supervisor, so cross-regulation questions get fanned-out in parallel instead of muddled through one prompt
+- **HTTPS via Let's Encrypt** — the site currently runs plain HTTP; adding TLS is a 30-minute nginx + certbot step
+- **API auth + rate limiting** — right now the streaming endpoint is public, meaning anyone with the URL can spend OpenAI credits on my key
+- **Ingest real PDFs, not the .txt samples** — chunks currently default to `page_number=1`, so citations don't always land on the exact page of the rendered PDF viewer
+- **Docker Compose** — containerize the whole stack (API + Redis + ChromaDB + nginx) so the whole thing comes up with one command
 
 ---
 
 ## Project Structure
 
 ```
-AI_Compliance_Auditor/
+Agentic_Compliance_Auditor/
 ├── src/
 │   ├── agents/              # LangGraph agent and tools
 │   │   ├── compliance_agent.py
 │   │   └── tools.py
-│   ├── memory/              # Redis integration
+│   ├── memory/              # Redis integration (with in-memory fallback)
 │   │   └── redis_memory.py
-│   ├── retrieval/           # ChromaDB and hybrid retrieval
+│   ├── retrieval/           # ChromaDB + hybrid (semantic + BM25) retriever
 │   │   ├── vector_store.py
 │   │   └── retriever.py
 │   ├── ingestion/           # Document loading and chunking
@@ -346,21 +362,28 @@ AI_Compliance_Auditor/
 │   │   └── chunker.py
 │   ├── evaluation/          # RAGAS evaluation pipeline
 │   │   └── ragas_eval.py
-│   ├── api/                 # FastAPI server
-│   │   └── main.py
-│   └── utils/
-├── ui/
-│   └── streamlit_app.py
+│   └── api/                 # FastAPI server (REST + SSE streaming)
+│       └── main.py
+├── frontend/                # React + Vite + TypeScript UI
+│   ├── src/
+│   │   ├── components/      # PdfViewer, TracePanel, AnswerBox, RegulationTabs, QuestionInput
+│   │   ├── store.ts         # Zustand global state
+│   │   ├── mockStream.ts    # Dev-time fake SSE producer
+│   │   ├── realStream.ts    # Production SSE client hitting /api/query/stream
+│   │   └── types.ts         # Shared event / chunk types
+│   ├── public/              # GDPR.pdf / HIPAA.pdf / SOC2.pdf served to the viewer
+│   ├── package.json
+│   └── vite.config.ts
+├── scripts/
+│   └── build_public_pdfs.py # Converts data/sample_docs/*.txt → frontend/public/*.pdf
 ├── data/
-│   ├── sample_docs/         # Sample regulatory PDFs
-│   ├── raw/                 # Drop your documents here
-│   ├── processed/
-│   └── chroma_db/
+│   ├── sample_docs/         # Source regulatory text files (GDPR / HIPAA / SOC2)
+│   └── chroma_db/           # Persisted vector index
 ├── config/
-│   └── config.py
+│   └── config.py            # Pydantic-settings loader over .env
+├── docs/                    # Project write-ups + PDF walkthroughs
 ├── requirements.txt
-├── setup.py
-├── .env.example
+├── setup.py                 # Runs ingestion into ChromaDB
 └── README.md
 ```
 
